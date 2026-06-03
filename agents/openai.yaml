@@ -1,0 +1,4 @@
+interface:
+  display_name: "Server Port Deploy"
+  short_description: "Deploy and update services behind Nginx ports"
+  default_prompt: "Use $server-port-deploy to deploy or update a project behind a dedicated Nginx port, clean stale artifacts, and update the server registry."
