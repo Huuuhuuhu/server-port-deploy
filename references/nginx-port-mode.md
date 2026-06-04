@@ -49,6 +49,13 @@ proxy_buffering off;
 
 HTTPS on `443` is straightforward when the user has a domain pointing to the server. A normal public TLS certificate is domain-based; HTTPS for a bare IP usually requires a self-signed or special certificate and browsers will warn.
 
+For per-tool subdomains such as `<tool>.huyujie.top`, use shared ports `80` and `443` with one Nginx `server_name` block per tool. Each block proxies to a different local backend port, for example:
+
+```text
+tool-a.huyujie.top -> Nginx 443 -> 127.0.0.1:18001
+tool-b.huyujie.top -> Nginx 443 -> 127.0.0.1:18002
+```
+
 Typical flow:
 
 ```bash
@@ -56,6 +63,16 @@ sudo certbot --nginx -d DOMAIN
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+Run Certbot once for each new hostname when using per-subdomain certificates. Certbot installs renewal; do not rerun it for normal app updates or restarts.
+
+For many subdomains, prefer a wildcard certificate if the DNS provider supports API automation:
+
+```bash
+sudo certbot certonly --dns-<provider> -d huyujie.top -d '*.huyujie.top'
+```
+
+With a wildcard certificate, add a new Nginx `server_name` block for each tool and reuse the wildcard certificate paths. You still reload Nginx for each new tool, but you do not need to issue a new certificate every time.
 
 Manual server block shape:
 

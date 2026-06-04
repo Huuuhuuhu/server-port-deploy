@@ -22,6 +22,7 @@ Keep the deployment registry at `~/server-deployments.md` on the target server c
 
 - Prefer Nginx dedicated-port mode unless the user explicitly asks for domain/path routing.
 - Prefer public port `80` for plain HTTP when it is free. Prefer public port `443` for HTTPS when a domain points to the server and a TLS certificate is configured. Use `12001-12999` for additional independent projects on the same IP when domain/path routing is not being used.
+- When each tool has its own subdomain, such as `<tool>.huyujie.top`, prefer domain-based HTTPS on shared ports `80` and `443`: one Nginx `server_name` per tool, each proxying to its own `127.0.0.1:<backend_port>`.
 - Do not expose app services directly on `0.0.0.0` unless there is a clear reason. Bind app services to `127.0.0.1:<backend_port>` and expose only Nginx's public port.
 - Treat three ports separately:
   - **User access port**: the port users type in the browser, such as `http://server-ip/` on port 80, `https://example.com/` on port 443, or `http://server-ip:12001` for an extra dedicated port.
@@ -110,7 +111,23 @@ For each service ask and answer explicitly:
      ```
    - Ensure the cloud security group and host firewall allow the public port.
 
-6. **Verify externally**
+6. **Configure HTTPS for domain/subdomain deployments**
+   - Use this when the user has a domain or per-tool subdomains pointing at the server, for example `<tool>.huyujie.top`.
+   - Prefer shared public ports `80` and `443` with name-based Nginx routing instead of assigning each tool a high public port.
+   - For a single new subdomain, configure an Nginx `server_name <tool>.huyujie.top` block and run:
+     ```bash
+     sudo certbot --nginx -d <tool>.huyujie.top
+     ```
+   - Certbot configures the certificate once and installs auto-renewal. Do not repeat certificate setup for every app restart; repeat it only when adding a new hostname or changing certificate strategy.
+   - For many subdomains under one base domain, prefer a wildcard certificate when DNS API automation is available:
+     ```bash
+     sudo certbot certonly --dns-<provider> -d huyujie.top -d '*.huyujie.top'
+     ```
+     Then reuse the same wildcard cert paths in each tool's Nginx server block. This avoids running HTTP certificate issuance for every new subdomain, but still requires adding an Nginx `server_name` block for each new tool.
+   - If DNS API automation is not available, use per-subdomain certificates with `certbot --nginx -d <tool>.huyujie.top`.
+   - Open cloud security group and host firewall ports `80/tcp` and `443/tcp`.
+
+7. **Verify externally**
    - From the server:
      ```bash
      curl -i http://127.0.0.1:<backend_port>/
@@ -121,7 +138,7 @@ For each service ask and answer explicitly:
      http://SERVER_IP:<public_port>
      ```
 
-7. **Update the registry**
+8. **Update the registry**
    - Update `~/server-deployments.md` with:
      - project name
      - host/server
