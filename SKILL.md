@@ -1,6 +1,6 @@
 ---
 name: server-port-deploy
-description: Deploy or update small web/API projects on a Linux server behind Nginx using a dedicated public port per project. Use when the user asks to deploy a new project, publish a local service to a server IP and port, configure Nginx reverse proxy, create or update a systemd service, avoid port conflicts, support concurrent users, or maintain a server deployment registry with user access ports, Nginx listen ports, and backend service ports.
+description: Deploy or update small web/API projects on a Linux server behind Nginx, defaulting to public HTTP/HTTPS ports 80/443 when appropriate or dedicated public ports for additional projects. Use when the user asks to deploy a new project, publish a local service to a server IP and port, configure Nginx reverse proxy, create or update a systemd service, avoid port conflicts, support concurrent users, or maintain a server deployment registry with user access ports, Nginx listen ports, and backend service ports.
 ---
 
 # Server Port Deploy
@@ -10,8 +10,8 @@ description: Deploy or update small web/API projects on a Linux server behind Ng
 Deploy small projects on a Linux server with this shape:
 
 ```text
-user -> http://SERVER_IP:PUBLIC_PORT
-     -> Nginx listen PUBLIC_PORT
+user -> http://SERVER_IP/ or https://DOMAIN/
+     -> Nginx listen 80, 443, or another PUBLIC_PORT
      -> proxy_pass http://127.0.0.1:BACKEND_PORT
      -> project service
 ```
@@ -21,9 +21,10 @@ Keep the deployment registry at `~/server-deployments.md` on the target server c
 ## Core Rules
 
 - Prefer Nginx dedicated-port mode unless the user explicitly asks for domain/path routing.
+- Prefer public port `80` for plain HTTP when it is free. Prefer public port `443` for HTTPS when a domain points to the server and a TLS certificate is configured. Use `12001-12999` for additional independent projects on the same IP when domain/path routing is not being used.
 - Do not expose app services directly on `0.0.0.0` unless there is a clear reason. Bind app services to `127.0.0.1:<backend_port>` and expose only Nginx's public port.
 - Treat three ports separately:
-  - **User access port**: the port users type in the browser, such as `http://server-ip:12001`.
+  - **User access port**: the port users type in the browser, such as `http://server-ip/` on port 80, `https://example.com/` on port 443, or `http://server-ip:12001` for an extra dedicated port.
   - **Nginx listen port**: the external port Nginx listens on. In dedicated-port mode this is normally the same as the user access port.
   - **Backend service port**: the local port the app process listens on, such as `127.0.0.1:18001`.
 - Before choosing ports, inspect `~/server-deployments.md`, live listeners, Nginx configs, and systemd units. Never rely only on the registry.
@@ -78,9 +79,11 @@ For each service ask and answer explicitly:
    - Compare live state with registry. If they disagree, trust live state for conflict avoidance and update the registry after verifying.
 
 3. **Choose ports**
-   - Prefer a predictable range:
-     - public/user/Nginx ports: `12001-12999`
-     - backend ports: `18001-18999`
+   - Prefer these public/user/Nginx ports:
+     - HTTP: `80` when free on this server/IP.
+     - HTTPS: `443` when the user has a domain pointing to the server and TLS can be configured.
+     - Additional dedicated ports: `12001-12999` when multiple independent projects share the same IP without domain/path routing.
+   - Prefer backend ports in `18001-18999`.
    - If the user specifies a public port, use it only if free in both Nginx and live listeners.
    - Use `scripts/registry.py find-free` for registry suggestions, then confirm with live `ss` and `nginx -T`.
 

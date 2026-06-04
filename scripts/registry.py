@@ -25,9 +25,13 @@ HEADERS = [
     "App Dir",
     "Health Check",
     "Nginx Config",
+    "Security",
     "Updated",
     "Notes",
 ]
+
+LEGACY_HEADERS = [header for header in HEADERS if header != "Security"]
+NUMERIC_HEADERS = {"User Port", "Nginx Listen Port", "Backend Port"}
 
 
 @dataclass
@@ -49,11 +53,15 @@ def template_registry_text() -> str:
         "## Port Ranges\n\n"
         "| Purpose | Preferred Range | Notes |\n"
         "|---|---:|---|\n"
-        "| User access / Nginx listen ports | 12001-12999 | Public ports users open as `http://SERVER_IP:PORT`. |\n"
+        "| HTTP user access / Nginx listen port | 80 | Default public HTTP entrypoint when free on this server/IP. |\n"
+        "| HTTPS user access / Nginx listen port | 443 | Preferred when a domain points to the server and a TLS certificate is configured. |\n"
+        "| Additional dedicated public ports | 12001-12999 | Use for multiple independent projects on the same IP without domain/path routing. |\n"
         "| Backend service ports | 18001-18999 | Local-only app ports, normally bound to `127.0.0.1`. |\n\n"
         "## Deployments\n\n"
-        "| Project | Server | User URL | User Port | Nginx Listen Port | Backend Bind | Backend Port | Process Manager | Unit/Process | App Dir | Health Check | Nginx Config | Updated | Notes |\n"
-        "|---|---|---|---:|---:|---|---:|---|---|---|---|---|---|---|\n"
+        "| Project | Server | User URL | User Port | Nginx Listen Port | Backend Bind | Backend Port | Process Manager | Unit/Process | App Dir | Health Check | Nginx Config | Security | Updated | Notes |\n"
+        "|---|---|---|---:|---:|---|---:|---|---|---|---|---|---|---|---|\n"
+        "\n"
+        "> **Security column**: record auth method (none / IP-allowlist / Basic-Auth / app-login / anti-bot), whether API docs are disabled, whether secret fields are masked, and residual risk. \"none (open by user's explicit choice)\" is valid; silent omission is not.\n"
     )
 
 
@@ -70,6 +78,11 @@ def format_row(values: list[str]) -> str:
     return "| " + " | ".join(format_cell(value) for value in values) + " |"
 
 
+def separator_row() -> str:
+    cells = ["---:" if header in NUMERIC_HEADERS else "---" for header in HEADERS]
+    return "|" + "|".join(cells) + "|"
+
+
 def load_registry(path: Path) -> Registry:
     if not path.exists():
         return load_registry_from_text(template_registry_text())
@@ -84,10 +97,12 @@ def load_registry_from_text(text: str) -> Registry:
 
 def load_registry_from_lines(lines: list[str], raw_text: str) -> Registry:
     table_start = None
+    table_headers = HEADERS
     for index, line in enumerate(lines):
         cells = split_row(line) if line.strip().startswith("|") else []
-        if cells == HEADERS:
+        if cells == HEADERS or cells == LEGACY_HEADERS:
             table_start = index
+            table_headers = cells
             break
     if table_start is None:
         return Registry(prefix=raw_text.rstrip() + "\n\n", rows=[])
@@ -98,16 +113,17 @@ def load_registry_from_lines(lines: list[str], raw_text: str) -> Registry:
         if not line.strip().startswith("|"):
             continue
         cells = split_row(line)
-        if len(cells) < len(HEADERS):
-            cells += [""] * (len(HEADERS) - len(cells))
-        row = dict(zip(HEADERS, cells[: len(HEADERS)]))
+        if len(cells) < len(table_headers):
+            cells += [""] * (len(table_headers) - len(cells))
+        row = {header: "" for header in HEADERS}
+        row.update(dict(zip(table_headers, cells[: len(table_headers)])))
         if row.get("Project") and row["Project"] != "-":
             rows.append(row)
     return Registry(prefix=prefix, rows=rows)
 
 
 def write_registry(path: Path, registry: Registry) -> None:
-    lines = [registry.prefix.rstrip(), "", format_row(HEADERS), "|---|---|---|---:|---:|---|---:|---|---|---|---|---|---|---|"]
+    lines = [registry.prefix.rstrip(), "", format_row(HEADERS), separator_row()]
     for row in registry.rows:
         lines.append(format_row([row.get(header, "") for header in HEADERS]))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,6 +203,7 @@ def cmd_upsert(args: argparse.Namespace) -> None:
         "App Dir": args.app_dir,
         "Health Check": args.health_check,
         "Nginx Config": args.nginx_config,
+        "Security": args.security,
         "Updated": args.updated or date.today().isoformat(),
         "Notes": args.notes,
     }
@@ -235,6 +252,7 @@ def parse_args() -> argparse.Namespace:
     upsert.add_argument("--app-dir", default="")
     upsert.add_argument("--health-check", default="")
     upsert.add_argument("--nginx-config", default="")
+    upsert.add_argument("--security", default="")
     upsert.add_argument("--updated", default="")
     upsert.add_argument("--notes", default="")
     upsert.set_defaults(func=cmd_upsert)

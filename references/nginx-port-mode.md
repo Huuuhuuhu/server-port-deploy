@@ -1,6 +1,8 @@
 # Nginx Dedicated-Port Mode
 
-Use this when users access each project as `http://SERVER_IP:PUBLIC_PORT`.
+Use this when users access a project through Nginx as `http://SERVER_IP/`, `https://DOMAIN/`, or `http://SERVER_IP:PUBLIC_PORT` for additional dedicated ports.
+
+Default to public port `80` for HTTP when it is free. Use public port `443` for HTTPS when a domain points to the server and a TLS certificate is available. Use `12001-12999` for additional independent projects on the same IP when domain/path routing is not being used.
 
 ## Request Flow
 
@@ -41,6 +43,49 @@ Add these headers if the app uses WebSocket, server-sent events, or streaming:
 proxy_set_header Upgrade $http_upgrade;
 proxy_set_header Connection "upgrade";
 proxy_buffering off;
+```
+
+## HTTPS Variant
+
+HTTPS on `443` is straightforward when the user has a domain pointing to the server. A normal public TLS certificate is domain-based; HTTPS for a bare IP usually requires a self-signed or special certificate and browsers will warn.
+
+Typical flow:
+
+```bash
+sudo certbot --nginx -d DOMAIN
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Manual server block shape:
+
+```nginx
+server {
+    listen 80;
+    server_name DOMAIN;
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/DOMAIN/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:BACKEND_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+    }
+}
 ```
 
 ## Install Pattern
