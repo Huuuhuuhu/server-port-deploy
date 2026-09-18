@@ -59,11 +59,26 @@ def private_path(path: Path, directory: bool = False) -> None:
 
 
 def private_directory(path: Path) -> None:
-    """Never follow directory symlinks, including ancestors."""
+    """Protect private directories from replacement through their ancestors."""
     path = absolute_path(path)
     reject_symlink_tree(path)
+    private_ancestors(path)
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    private_ancestors(path)
     private_path(path, directory=True)
+
+
+def private_ancestors(path: Path) -> None:
+    if os.name != "posix":
+        return
+    for parent in path.parents:
+        if not parent.exists():
+            continue
+        info = parent.stat()
+        # A trusted sticky directory (e.g. /tmp) protects owned child entries.
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
+                or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)):
+            raise ValueError("凭据路径的上层目录须由 root 或当前账号控制，且不能被其他账号替换内容")
 
 
 @contextmanager

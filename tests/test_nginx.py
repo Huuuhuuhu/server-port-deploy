@@ -19,7 +19,8 @@ class NginxTests(unittest.TestCase):
     def generate(self, *args, ok=True):
         result = subprocess.run([sys.executable, str(SCRIPTS / "render_nginx.py"),
                                  "--project", "translator", "--backend-port", "18001", *args],
-                                capture_output=True, text=True, encoding="utf-8")
+                                capture_output=True, text=True, encoding="utf-8",
+                                env={**os.environ, "PYTHONUTF8": "1"})
         self.assertEqual(result.returncode == 0, ok, result.stderr)
         return result.stdout
 
@@ -46,6 +47,8 @@ class NginxTests(unittest.TestCase):
             ("--public-port", "70000"), ("--backend-port", "0"),
             ("--server-name", "good.example;\ninclude evil;"),
             ("--backend-bind", "localhost;"), ("--timeout", "-1"),
+            ("--backend-bind", "fe80::1%eth0"),
+            ("--backend-bind", "fe80::1%lo;\nadd_header X-Test injected;"),
             ("--redirect-http",), ("--https", "--redirect-http"),
             ("--https", "--server-name", "a.example", "--public-port", "80", "--redirect-http"),
             ("--https", "--ssl-certificate", "/tmp/x;bad", "--ssl-certificate-key", "/tmp/key"),
@@ -53,6 +56,14 @@ class NginxTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case):
                 self.generate(*case, ok=False)
+
+    def test_invalid_backend_cannot_replace_existing_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "nginx.conf"
+            output.write_bytes(b"existing config\n")
+            self.generate("--backend-bind", "fe80::1%lo;\ninvalid;",
+                          "--out", str(output), ok=False)
+            self.assertEqual(output.read_bytes(), b"existing config\n")
 
     @unittest.skipUnless(shutil.which("nginx") and shutil.which("openssl"),
                          "nginx and openssl required for real configuration validation")

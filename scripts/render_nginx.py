@@ -40,9 +40,11 @@ def parse_args(argv=None):
         parser.error("--server-name 只接受单个域名或 IPv4 地址；多个域名请分别审查配置")
     try:
         address = ipaddress.ip_address(args.backend_bind)
+        if address.version == 6 and address.scope_id is not None:
+            raise ValueError("IPv6 scope identifiers are not supported")
         args.backend_bind = f"[{address}]" if address.version == 6 else str(address)
     except ValueError:
-        parser.error("--backend-bind 必须是有效 IP 地址")
+        parser.error("--backend-bind 必须是有效 IP 地址，IPv6 地址不能含 % 接口标识")
     if not 1 <= args.timeout <= 86400:
         parser.error("--timeout 必须在 1–86400 秒内")
     if args.redirect_http and (not args.https or args.public_port == 80 or args.server_name == "_"):

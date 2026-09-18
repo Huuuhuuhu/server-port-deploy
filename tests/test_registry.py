@@ -144,6 +144,55 @@ class RegistryTests(unittest.TestCase):
         self.run_cli("upsert", "--project", "translator", "--server", "server-a", "--notes", "")
         self.assertEqual(registry.load_registry(self.path).rows[0]["Notes"], "")
 
+    def test_identifiers_are_normalized_and_invalid_required_values_do_not_write(self):
+        self.upsert()
+        self.run_cli("upsert", "--project", " translator ", "--server", " server-a ",
+                     "--notes", "更新同一条记录")
+        rows = json.loads(self.run_cli("get", "--project", " translator ",
+                                      "--server", " server-a ").stdout)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["Notes"], "更新同一条记录")
+        before = self.path.read_bytes()
+        for option in ("--project", "--server", "--user-url"):
+            for value in ("", "   ", "-", "first\nsecond", "first\u2028second", "first\tsecond"):
+                with self.subTest(option=option, value=value):
+                    self.run_cli("upsert", "--project", "translator", "--server", "server-a",
+                                 option, value, ok=False)
+                    self.assertEqual(self.path.read_bytes(), before)
+
+    def test_missing_identifiers_in_existing_rows_are_not_silently_discarded(self):
+        for missing in ("Project", "Server"):
+            with self.subTest(missing=missing):
+                row = {h: "" for h in registry.HEADERS}
+                row.update({"Project": "translator", "Server": "server-a", "Notes": "应保留的记录"})
+                row[missing] = ""
+                body = (registry.format_row(registry.ZH_HEADERS) + "\n"
+                        + registry.separator_row() + "\n"
+                        + registry.format_row([row[h] for h in registry.HEADERS]) + "\n")
+                self.path.write_text(body, encoding="utf-8")
+                before = self.path.read_bytes()
+                self.run_cli("upsert", "--project", "translator", "--server", "server-a",
+                             "--notes", "修改", ok=False)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_unicode_line_separators_in_notes_keep_table_readable(self):
+        lines = ["first", "second", "third", "fourth", "fifth"]
+        self.upsert("translator", "--notes", "first\u2028second\u2029third\x85fourth\v fifth")
+        row = registry.load_registry(self.path).rows[0]
+        self.assertEqual(row["Notes"].split(), lines)
+        self.run_cli("upsert", "--project", "translator", "--server", "server-a", "--security", "未公开")
+        self.assertEqual(registry.load_registry(self.path).rows[0]["Notes"], row["Notes"])
+
+    @unittest.skipUnless(os.name == "posix", "Linux symlinks")
+    def test_force_init_rejects_symlink_without_creating_backup(self):
+        target = self.path.parent / "unrelated.txt"
+        target.write_bytes(b"SYNTHETIC-UNRELATED-CONTENT")
+        self.path.symlink_to(target)
+        self.run_cli("init", "--force", ok=False)
+        self.assertTrue(self.path.is_symlink())
+        self.assertEqual(target.read_bytes(), b"SYNTHETIC-UNRELATED-CONTENT")
+        self.assertEqual(list(self.path.parent.glob("*.bak.*")), [])
+
     def test_force_init_backs_up(self):
         self.upsert()
         before = self.path.read_bytes()

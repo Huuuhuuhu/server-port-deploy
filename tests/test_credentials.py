@@ -298,6 +298,35 @@ print('privileges verified')
                      "--bind", "DASHSCOPE_API_KEY=dashscope-api-key",
                      "--as-user", account.pw_name, "--", sys.executable, "-c", code)
 
+    @unittest.skipUnless(os.name == "posix", "Linux filesystem permissions")
+    def test_writable_ancestor_blocks_launch_without_changing_credentials(self):
+        self.put()
+        cipher = self.root / "translator/prod.age"
+        before = (self.identity.read_bytes(), cipher.read_bytes())
+        marker = self.base / "unexpected-launch"
+        self.base.chmod(0o777)
+        self.run_cli("exec", "--project", "translator", "--environment", "prod",
+                     "--bind", "DASHSCOPE_API_KEY=dashscope-api-key", "--",
+                     sys.executable, "-c", f"open({str(marker)!r}, 'w').close()", ok=False)
+        self.assertFalse(marker.exists())
+        self.assertEqual((self.identity.read_bytes(), cipher.read_bytes()), before)
+
+    @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() == 0, "root required to change ancestor owner")
+    def test_root_vault_rejects_ancestor_owned_by_application_user(self):
+        import pwd
+        try:
+            account = pwd.getpwnam("nobody")
+        except KeyError:
+            self.skipTest("no nobody account available")
+        self.put()
+        original = self.base.stat()
+        try:
+            os.chown(self.base, account.pw_uid, account.pw_gid)
+            self.run_cli("list", "--project", "translator", "--environment", "prod", ok=False)
+        finally:
+            os.chown(self.base, original.st_uid, original.st_gid)
+        self.execute_check(self.secret)
+
 
 if __name__ == "__main__":
     unittest.main()

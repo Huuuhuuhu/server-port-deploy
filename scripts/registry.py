@@ -71,7 +71,7 @@ def split_row(line: str) -> list[str]:
 
 
 def format_cell(value: str) -> str:
-    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    text = " ".join(str(value or "").splitlines()).strip()
     return (html.escape(text, quote=False).replace("\\", "&#92;")
             .replace("|", "&#124;") or "-")
 
@@ -121,7 +121,12 @@ def load_registry_from_lines(lines: list[str], raw_text: str) -> Registry:
             raise ValueError("部署表列数不匹配，未改写文件；请从备份核对原数据")
         row = {h: "" for h in HEADERS}
         row.update({h: "" if cell == "-" else cell for h, cell in zip(mapped, cells)})
-        if row["Project"]:
+        if any(row.values()):
+            try:
+                row["Project"] = required_text(row["Project"])
+                row["Server"] = required_text(row["Server"])
+            except argparse.ArgumentTypeError:
+                raise ValueError("部署记录的项目或服务器标识无效，未改写文件") from None
             rows.append(row)
         end += 1
     keys = [(r["Project"].casefold(), r["Server"].casefold()) for r in rows]
@@ -132,6 +137,7 @@ def load_registry_from_lines(lines: list[str], raw_text: str) -> Registry:
 
 
 def backup_file(path: Path) -> None:
+    reject_symlink(path)
     if path.exists():
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         atomic_write(path.with_name(path.name + ".bak." + stamp), path.read_bytes())
@@ -162,6 +168,14 @@ def port(value: str) -> int:
     if not 1 <= number <= 65535:
         raise argparse.ArgumentTypeError("端口必须在 1–65535 内")
     return number
+
+
+def required_text(value: str) -> str:
+    text = value.strip()
+    if (not text or text == "-" or len(text.splitlines()) != 1
+            or any(ord(char) < 32 or ord(char) == 127 for char in text)):
+        raise argparse.ArgumentTypeError("项目、服务器和访问地址不能为空、占位符或含控制字符")
+    return text
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -195,6 +209,7 @@ def cmd_find_free(args: argparse.Namespace) -> None:
 
 
 def cmd_init(args: argparse.Namespace) -> None:
+    reject_symlink(args.registry)
     if args.registry.exists() and not args.force:
         print("登记表已存在：" + str(args.registry))
         return
@@ -244,8 +259,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     listing.add_argument("--json", action="store_true", help="稳定的英文机器字段名")
     listing.set_defaults(func=cmd_list)
     get = sub.add_parser("get")
-    get.add_argument("--project", required=True)
-    get.add_argument("--server")
+    get.add_argument("--project", type=required_text, required=True)
+    get.add_argument("--server", type=required_text)
     get.set_defaults(func=cmd_get)
     init = sub.add_parser("init")
     init.add_argument("--force", action="store_true", help="先备份再重新初始化")
@@ -253,13 +268,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     find = sub.add_parser("find-free")
     find.add_argument("--start", type=port, required=True)
     find.add_argument("--end", type=port, required=True)
-    find.add_argument("--server")
+    find.add_argument("--server", type=required_text)
     find.add_argument("--used", type=port, nargs="*")
     find.set_defaults(func=cmd_find_free)
     upsert = sub.add_parser("upsert")
-    upsert.add_argument("--project", required=True)
-    upsert.add_argument("--server", required=True)
-    for option in ("user-url", "backend-bind", "process-manager", "unit", "app-dir",
+    upsert.add_argument("--project", type=required_text, required=True)
+    upsert.add_argument("--server", type=required_text, required=True)
+    upsert.add_argument("--user-url", type=required_text)
+    for option in ("backend-bind", "process-manager", "unit", "app-dir",
                    "health-check", "nginx-config", "security", "updated", "notes", "credential-refs"):
         upsert.add_argument("--" + option)
     for option in ("user-port", "backend-port"):
