@@ -2,7 +2,7 @@
 
 [![回归检查](https://github.com/Huuuhuuhu/server-port-deploy/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/Huuuhuuhu/server-port-deploy/actions/workflows/check.yml)
 
-一个面向 Linux 服务器的 Codex 技能：通过 Nginx 部署与更新 Web/API 应用，维护中文部署记录，并用 age 集中加密保存应用凭据，供本机 Agent 和服务器应用使用。
+一个面向 Linux 服务器的部署技能，可供 Codex、Claude Code 等支持 Agent Skills 的工具使用。提供项目、服务器和域名信息后，Agent 按默认规则部署或更新应用，配置 HTTPS、维护中文记录，并按需管理服务器上的加密凭据。
 
 技能由部署指令、参考文档和 Python 工具组成。Agent 读取 [SKILL.md](SKILL.md)，结合项目实际情况执行部署；工具负责登记表更新、Nginx 配置生成和凭据操作。仓库中的内容是工具与模板，实际部署记录、密文和解密密钥保存在目标服务器。
 
@@ -19,7 +19,7 @@
 | 中文运维交接 | 维护部署登记表和凭据元数据目录，记录版本、路径、验证结果、安全状态与恢复位置 |
 | API Key 等凭据管理 | 通过标准输入加密入库，按项目和环境组织，支持存在性检查、替换、备份与应用启动注入 |
 
-适合使用 Nginx 作为入口的个人服务器或多应用 Linux 主机，例如网站、API 服务、AI 翻译器及需要调用模型的后端。具体应用仍须具备可验证的运行方式；复杂的多主机编排、集中授权和密钥审计需要额外方案。
+适合个人服务器或多应用 Linux 主机上的网站、API 服务、AI 翻译器及其他 Web 应用。Web 入口默认使用 Nginx，也可以沿用满足要求的既有网关；具体选择由项目需求和服务器现状决定。复杂的多主机编排、集中授权和密钥审计需要额外方案。
 
 ## 安装与开始使用
 
@@ -27,72 +27,36 @@
 
 | 位置 | 要求 |
 | --- | --- |
-| 本机 Agent | 支持技能的 Codex 环境，以及访问项目、执行命令和连接目标服务器的能力；手动克隆时需要 Git |
-| 目标服务器 | Linux、Python 3.9+、Nginx，以及项目实际需要的运行时和进程管理方式 |
+| 本机 Agent | 支持 Agent Skills 的环境，以及读取项目、执行命令和通过 SSH 连接目标服务器的能力 |
+| 目标服务器 | Linux、Python 3.9+，以及项目需要的运行时、进程管理方式和入口；默认使用 Nginx |
 | 凭据功能 | 服务器上安装 `age` 和 `age-keygen`；仅在需要凭据库时初始化 |
-| 公网 HTTPS | 可用域名、正确的 DNS、有效证书和匹配的安全组/防火墙规则 |
+| 公网 HTTPS | 与预期域名或地址匹配的有效证书、正确的解析与路由，以及匹配的安全组/防火墙规则 |
 
 本机可以使用 Windows、macOS 或 Linux。凭据权限检查和应用降权面向 Linux 服务器；在 Windows 上运行部分脚本不能替代 Linux 权限验证。安装技能后，服务器依赖和应用配置仍需在部署任务中落实。
 
 ### 安装技能
 
-在 Codex 中让内置安装器从这个仓库安装，仓库根目录就是技能目录：
+直接把仓库地址发给你使用的 Agent：
 
 ```text
-$skill-installer 从 https://github.com/Huuuhuuhu/server-port-deploy 安装根目录的技能，技能目录名使用 server-port-deploy。
+帮我安装这个技能：https://github.com/Huuuhuuhu/server-port-deploy
 ```
 
-也可以手动安装。按照当前 Codex 官方文档，用户级技能可放在 `~/.agents/skills`，项目级技能可放在项目的 `.agents/skills`；安装器和发现规则见 [OpenAI 官方技能文档](https://developers.openai.com/zh-Hans/docs/build-skills)。以下命令用于目标目录尚不存在的首次安装。
-
-macOS / Linux：
-
-```bash
-mkdir -p "$HOME/.agents/skills"
-git clone https://github.com/Huuuhuuhu/server-port-deploy.git "$HOME/.agents/skills/server-port-deploy"
-```
-
-Windows PowerShell：
-
-```powershell
-$skillPath = Join-Path $HOME '.agents\skills\server-port-deploy'
-New-Item -ItemType Directory -Force -Path (Split-Path $skillPath) | Out-Null
-git clone https://github.com/Huuuhuuhu/server-port-deploy.git $skillPath
-```
-
-已安装时先确认现有目录和本地修改，避免重复安装或覆盖自定义内容。安装后可在任务中显式使用 `$server-port-deploy`；如果技能尚未显示，重启 Codex 后再检查。完整目录需包含 `SKILL.md`、`scripts/` 和 `references/`，不要只复制入口文件。
+核心使用通用的 `SKILL.md`、脚本和参考文档结构，脚本不依赖某家 Agent 的 SDK。`agents/openai.yaml` 是 Codex 的界面元数据，其他 Agent 使用核心技能不依赖它。格式与调用方式可参考 [Codex 文档](https://developers.openai.com/zh-Hans/docs/build-skills) 和 [Claude Code 文档](https://code.claude.com/docs/en/skills)。实际执行仍取决于 Agent 的工具、网络和权限；当前 CI 验证辅助脚本，不覆盖不同 Agent 的完整部署过程。
 
 ### 发起部署任务
 
-把项目位置、服务器 SSH 别名、预期域名、环境和访问控制要求告诉 Agent。已有服务还应提供已知部署位置、需要保留的数据和可接受的切换窗口；现有配置里的敏感值应通过已授权的受保护通道处理。
-
-首次部署：
+通常只需提供这些信息：
 
 ```text
-$server-port-deploy
-把当前项目部署到 SSH 别名 server-a 对应的 Linux 服务器，使用 translate.example.com。
-先参考项目部署文档，验证能否适配本技能的规范。
-这是需要登录的 AI 服务，请配置 HTTPS，并维护中文部署记录。
+把 translator 项目部署到我的服务器。
+服务器信息：server-a（已配置 SSH）
+域名：translate.example.com（已创建）
 ```
 
-更新已有服务：
+Agent 会自行阅读项目说明、检查服务器和 DNS，按默认规则处理 HTTPS、入口、数据保留、必要凭据、验证及中文记录。能查到或已有约定的信息不再要求你重复填写；缺少关键访问权限、凭据或存在无法判断的冲突时，才补问必要信息。
 
-```text
-$server-port-deploy
-把服务器上已部署的 translator 更新到当前已确认版本。
-沿用现有域名和端口，保留数据库、上传文件和凭据，验证成功后更新中文记录。
-请保留上一个可恢复版本，并说明回滚位置。
-```
-
-整理凭据并接入应用：
-
-```text
-$server-port-deploy
-检查当前服务器上 translator 所需 API Key 的保存位置和接入方式，不输出真实值。
-把已确认属于该应用的凭据接入服务器加密库，让服务启动时读取所需环境变量。
-应用之间需要隔离，请使用独立运行账号并验证权限，再更新中文凭据目录。
-```
-
-这些名称仅用于示范任务描述，执行时以用户提供的信息及服务器实际状态为准。
+更新时也可以直接说“把服务器上的 translator 更新到当前版本”。需要明确指定技能时，Codex 使用 `$server-port-deploy`，Claude Code 使用 `/server-port-deploy`；不必把默认步骤逐项写进请求。
 
 ## 部署规则
 
@@ -106,7 +70,18 @@ $server-port-deploy
 
 ### 入口和端口
 
-默认访问结构为：用户 → Nginx → 本机后端服务。更新时优先保留原域名、端口和服务单元；新建服务有域名且具备 TLS 条件时，优先共享 80/443，按域名分流。
+普通 Web 应用默认采用：用户 → Nginx → 本机后端服务。Nginx 负责接收请求、处理 HTTPS 和转发，应用进程由 systemd、Compose 等方式运行。更新时优先保留已有入口；新建域名入口优先共享 80/443，按域名分流。
+
+并非每个项目或组件都需要套用同一份 Nginx 配置：
+
+| 情况 | 处理方式 |
+| --- | --- |
+| 普通 HTTP API、WebSocket、SSE | 默认使用 Nginx，按协议配置代理 |
+| 已有 Caddy、Traefik 或项目自带网关 | 验证满足 HTTPS、访问控制和项目约束后沿用，避免重复接管入口 |
+| 项目中的后台 worker、定时任务 | 没有 HTTP 入口的组件无需反向代理，按实际任务方式运行 |
+| gRPC、TCP/UDP 服务或特殊网关要求 | 单独核实协议、模块与部署方式，不能直接套用当前 HTTP 配置生成器 |
+
+Nginx 本身提供 [gRPC](https://nginx.org/en/docs/http/ngx_http_grpc_module.html) 和 [TCP/UDP 代理](https://nginx.org/en/docs/stream/ngx_stream_proxy_module.html)能力，但本仓库的生成器只覆盖常见 HTTP 反向代理配置。需要其他方式时，仍须满足用户要求和项目硬性条件；适配不可行或无法验证时阻断部署，不能直接照搬项目默认方案。
 
 | 用途 | 默认建议 |
 | --- | --- |
@@ -117,13 +92,15 @@ $server-port-deploy
 
 这些范围是建议，实际可用性必须结合登记表、监听进程和 Nginx 配置核实。`find-free` 只排除登记表和调用者显式提供的已用端口，不探测或预留系统端口。负载均衡、NAT 和容器映射场景还需分别核对各层地址。
 
-承载登录、私密数据或付费模型调用的公网入口，需要 TLS 和适当的认证/授权。配置生成器输出的是草稿，证书签发、应用专属访问控制、配置安装与重载由部署流程落实。详见 [Nginx 配置与验证](references/nginx-port-mode.md)。
+**公网 Web 入口默认配置 HTTPS，无需用户额外提出。** Agent 会核验域名解析，复用或申请有效证书，并检查续期与实际访问。已有网关负责 TLS 时，验证完整访问链路即可；本机回环上的 HTTP 后端可以保持原方式。
+
+确实暂时做不到 HTTPS 时，说明具体原因、已验证的替代方式和实际访问范围。只有未被明确要求必须使用 HTTPS、且不承载登录、私密数据或付费模型调用等敏感能力的入口，才可在确认暴露面可接受后记录为 HTTP 例外；其余情况阻断公网业务开放，继续本机或受限验证。详见 [入口与 HTTPS 策略](references/nginx-port-mode.md)。
 
 ### 更新和验证
 
 推荐先在新的 release 目录完成依赖安装和构建，保留持久化数据，再切换当前版本并验证。默认保留当前版本、上一个已验证版本和恢复所需配置；凭据库、解密密钥、数据库与上传文件独立保存。
 
-验证覆盖进程状态、本机后端、正确域名和协议的 Nginx 入口、外部访问，以及登录或最小业务行为。失败后按实际更新方式恢复并报告状态。数据库迁移需另行确认兼容性，切回旧代码不能撤销不可逆的数据变化。操作细节见 [已有部署的安全更新](references/update-existing-deployment.md)。
+验证覆盖进程状态、本机后端、实际使用的入口、外部访问，以及登录或最小业务行为。失败后按实际更新方式恢复并报告状态。数据库迁移需另行确认兼容性，切回旧代码不能撤销不可逆的数据变化。操作细节见 [已有部署的安全更新](references/update-existing-deployment.md)。
 
 ## 会生成和维护哪些文件
 
@@ -138,6 +115,8 @@ $server-port-deploy
 文档标题、说明、用途、安全措施、备注和交付报告要求使用中文。项目标识、路径、域名、变量名和 JSON 机器字段保持原样；历史自由文本不会由脚本自动翻译。
 
 登记工具兼容已知的旧英文表头，迁移前备份，保留表外备注；无法识别的表结构会拒绝改写。凭据目录是 `catalog` 生成的快照，入库和轮换后需刷新。实际文件权限与初始化方式见 [凭据存储与接入](references/credentials.md)。
+
+沿用其他网关时，登记使用 `upsert --no-nginx`，Nginx 专属字段留空，在备注中记录实际入口及配置位置。项目的无入口组件记入相关部署备注，不为填表虚构域名或端口。
 
 ## 凭据如何使用
 

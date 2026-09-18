@@ -225,6 +225,9 @@ def cmd_upsert(args: argparse.Namespace) -> None:
         value = getattr(args, option)
         if value is not None:
             row[header] = str(value)
+    if args.no_nginx:
+        row["Nginx Listen Port"] = ""
+        row["Nginx Config"] = ""
     row["Updated"] = args.updated or date.today().isoformat()
     registry.rows.sort(key=lambda r: (
         r["Server"], int(r["User Port"]) if r["User Port"].isdigit() else 0, r["Project"]))
@@ -259,10 +262,16 @@ def parse_args(argv=None) -> argparse.Namespace:
     for option in ("user-url", "backend-bind", "process-manager", "unit", "app-dir",
                    "health-check", "nginx-config", "security", "updated", "notes", "credential-refs"):
         upsert.add_argument("--" + option)
-    for option in ("user-port", "nginx-port", "backend-port"):
+    for option in ("user-port", "backend-port"):
         upsert.add_argument("--" + option, type=port)
+    nginx = upsert.add_mutually_exclusive_group()
+    nginx.add_argument("--nginx-port", type=port)
+    nginx.add_argument("--no-nginx", action="store_true",
+                       help="未使用 Nginx 的 Web 入口：清空 Nginx 端口和配置，实际入口写入备注")
     upsert.set_defaults(func=cmd_upsert)
     args = parser.parse_args(argv)
+    if args.command == "upsert" and args.no_nginx and args.nginx_config:
+        parser.error("--no-nginx 不能同时指定非空 --nginx-config")
     if args.allow_root and args.registry is None:
         parser.error("--allow-root 必须同时显式指定 --registry")
     if hasattr(os, "geteuid") and os.geteuid() == 0 and not args.allow_root:

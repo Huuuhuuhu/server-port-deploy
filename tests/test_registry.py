@@ -42,6 +42,48 @@ class RegistryTests(unittest.TestCase):
         self.assertIn("项目,服务器", self.run_cli("list").stdout)
         rows = json.loads(self.run_cli("get", "--project", "translator").stdout)
         self.assertEqual(rows[0]["Backend Bind"], "127.0.0.1")
+        self.assertEqual(rows[0]["Nginx Listen Port"], "443")
+
+    def test_non_nginx_entry_keeps_real_ports_and_survives_partial_update(self):
+        self.upsert("translator", "--no-nginx", "--notes", "入口为 Caddy；已验证 HTTPS")
+        row = json.loads(self.run_cli("get", "--project", "translator").stdout)[0]
+        self.assertEqual(row["Nginx Listen Port"], "")
+        self.assertEqual(row["Nginx Config"], "")
+        self.assertEqual(row["User Port"], "443")
+        self.assertEqual(row["Backend Port"], "18001")
+        self.run_cli("upsert", "--project", "translator", "--server", "server-a",
+                     "--credential-refs", "translator/prod/key")
+        updated = registry.load_registry(self.path).rows[0]
+        self.assertEqual(updated["Nginx Listen Port"], "")
+        self.assertEqual(updated["Nginx Config"], "")
+        self.assertEqual(updated["Notes"], row["Notes"])
+        self.assertEqual(updated["Credential Refs"], "translator/prod/key")
+
+    def test_switch_to_non_nginx_clears_stale_config_and_preserves_service(self):
+        self.upsert("translator", "--nginx-port", "8443",
+                    "--nginx-config", "/etc/nginx/conf.d/translator.conf",
+                    "--unit", "translator.service", "--app-dir", "/srv/translator/current",
+                    "--credential-refs", "translator/prod/key", "--security", "HTTPS；应用登录")
+        before = registry.load_registry(self.path).rows[0]
+        self.run_cli("upsert", "--project", "translator", "--server", "server-a",
+                     "--no-nginx", "--notes", "现有入口为 Caddy")
+        after = registry.load_registry(self.path).rows[0]
+        for key in registry.HEADERS:
+            if key not in ("Nginx Listen Port", "Nginx Config", "Notes", "Updated"):
+                self.assertEqual(after[key], before[key])
+        self.assertEqual(after["Nginx Listen Port"], "")
+        self.assertEqual(after["Nginx Config"], "")
+        self.assertEqual(after["Notes"], "现有入口为 Caddy")
+
+    def test_conflicting_gateway_arguments_do_not_change_registry(self):
+        self.upsert()
+        before = self.path.read_bytes()
+        for option, value in (("--nginx-port", "443"),
+                              ("--nginx-config", "/etc/nginx/conf.d/translator.conf")):
+            with self.subTest(option=option):
+                self.run_cli("upsert", "--project", "translator", "--server", "server-a",
+                             "--no-nginx", option, value, ok=False)
+                self.assertEqual(self.path.read_bytes(), before)
 
     def test_pipe_backslash_entities_chinese_round_trip(self):
         notes = r"中文 | C:\test\\file \| &amp; <tag> end\\"
