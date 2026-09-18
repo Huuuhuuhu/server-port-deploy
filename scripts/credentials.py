@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Linux server credential store: age encryption, metadata-only output, scoped exec."""
+"""Linux credential store; project/environment namespaces are not access controls."""
 from __future__ import annotations
 
 import argparse
@@ -55,6 +55,8 @@ def json_bytes(value) -> bytes:
 
 
 class Vault:
+    """The owning administrator can access all scopes; apps need OS-level isolation."""
+
     def __init__(self, root: Path, identity: Path):
         self.root = absolute_path(root)
         self.identity = absolute_path(identity)
@@ -244,7 +246,9 @@ def launch(args, bindings: dict[str, str]) -> None:
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="服务器集中加密凭据：不提供明文 get 命令")
+    parser = argparse.ArgumentParser(
+        description="服务器集中加密凭据：不提供明文 get 命令",
+        epilog="项目/环境是命名范围，不提供同账号应用间的权限隔离；隔离依赖独立运行账号与操作系统权限。")
     parser.add_argument("--store", type=Path,
                         default=Path.home() / ".local/share/server-port-deploy/credentials")
     parser.add_argument("--identity", type=Path,
@@ -253,8 +257,8 @@ def parse_args(argv=None):
     sub.add_parser("init")
     for command in ("put", "list", "check", "exec"):
         scope = sub.add_parser(command)
-        scope.add_argument("--project", type=identifier, required=True)
-        scope.add_argument("--environment", type=identifier, required=True)
+        scope.add_argument("--project", type=identifier, required=True, help="项目命名范围，不是访问权限")
+        scope.add_argument("--environment", type=identifier, required=True, help="环境命名范围，不是访问权限")
         if command == "put":
             scope.add_argument("--name", type=identifier, required=True)
             scope.add_argument("--stdin", action="store_true", required=True)
@@ -265,7 +269,7 @@ def parse_args(argv=None):
             scope.add_argument("--name", type=identifier, action="append", required=True)
         if command == "exec":
             scope.add_argument("--bind", action="append", required=True, metavar="ENV=NAME")
-            scope.add_argument("--as-user", help="root 解密后降权到专用应用账号")
+            scope.add_argument("--as-user", help="root 解密后降权；需要隔离的应用须分别使用独立账号")
             scope.add_argument("child", nargs=argparse.REMAINDER)
     listing = sub.add_parser("catalog")
     listing.add_argument("--out", type=Path, default=Path.home() / "server-credentials.md")

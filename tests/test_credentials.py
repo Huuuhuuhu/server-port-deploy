@@ -137,6 +137,25 @@ class CredentialTests(unittest.TestCase):
         self.run_cli("check", "--project", "translator", "--environment", "staging",
                      "--name", "dashscope-api-key", ok=False)
 
+    def test_vault_owner_can_read_other_scope_despite_selected_bindings(self):
+        self.put()
+        other_value = "ONLY-TEST-OTHER-PROJECT"
+        self.put("other-key", "another-project", other_value)
+        digest = hashlib.sha256(other_value.encode()).hexdigest()
+        # Selection is deliberately not an ACL: an owner process can open another scope.
+        code = (
+            "import hashlib,os,sys; from pathlib import Path; "
+            f"sys.path.insert(0,{str(SCRIPTS)!r}); from credentials import Vault; "
+            f"vault=Vault(Path({str(self.root)!r}),Path({str(self.identity)!r})); "
+            "assert 'OTHER_PROJECT_KEY' not in os.environ; "
+            "other=vault.read('another-project','prod')['records']['other-key']['value']; "
+            f"assert hashlib.sha256(other.encode()).hexdigest()=={digest!r}; "
+            "print('owner access verified without disclosing values')"
+        )
+        self.run_cli("exec", "--project", "translator", "--environment", "prod",
+                     "--bind", "DASHSCOPE_API_KEY=dashscope-api-key",
+                     "--", sys.executable, "-c", code)
+
     def test_unsafe_binding_names_and_duplicates_rejected(self):
         self.put()
         for binding in ("PATH=dashscope-api-key", "LD_PRELOAD=dashscope-api-key",
@@ -251,14 +270,30 @@ class CredentialTests(unittest.TestCase):
         except KeyError:
             self.skipTest("no nobody account available")
         self.put()
-        code = (
-            "import os,hashlib; "
-            f"assert os.getuid()=={account.pw_uid}; assert os.getgid()=={account.pw_gid}; "
-            f"assert not os.access({str(self.identity)!r},os.R_OK); "
-            f"assert not os.access({str(self.root)!r},os.R_OK); "
-            f"assert hashlib.sha256(os.environ['DASHSCOPE_API_KEY'].encode()).hexdigest()=="
-            f"{hashlib.sha256(self.secret.encode()).hexdigest()!r}; print('privileges verified')"
-        )
+        self.put("other-key", "another-project", "ONLY-TEST-OTHER-PROJECT")
+        # Let the app traverse the fixture parent so the vault/key permissions are tested.
+        self.base.chmod(0o755)
+        groups = os.getgrouplist(account.pw_name, account.pw_gid)
+        protected = [str(self.identity), str(self.root / "translator/prod.age"),
+                     str(self.root / "another-project/prod.age")]
+        code = f"""
+import os, hashlib
+assert os.getresuid() == ({account.pw_uid},) * 3
+assert os.getresgid() == ({account.pw_gid},) * 3
+assert set(os.getgroups()) == set({groups!r})
+assert os.access({str(self.base)!r}, os.X_OK)
+assert not os.access({str(self.root)!r}, os.R_OK)
+for path in {protected!r}:
+    try:
+        with open(path, 'rb'):
+            pass
+    except PermissionError:
+        continue
+    raise AssertionError('application unexpectedly opened a protected credential file')
+assert hashlib.sha256(os.environ['DASHSCOPE_API_KEY'].encode()).hexdigest() == {hashlib.sha256(self.secret.encode()).hexdigest()!r}
+assert 'OTHER_PROJECT_KEY' not in os.environ
+print('privileges verified')
+"""
         self.run_cli("exec", "--project", "translator", "--environment", "prod",
                      "--bind", "DASHSCOPE_API_KEY=dashscope-api-key",
                      "--as-user", account.pw_name, "--", sys.executable, "-c", code)
