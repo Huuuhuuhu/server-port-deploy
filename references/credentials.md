@@ -90,9 +90,9 @@ catalog 是按需重建的元数据快照，put/轮换后必须刷新；两份 M
 
 ## 本机 Agent 通过 SSH 使用
 
-先查询目录或 list，再执行需要凭据的工具。以下命令只包含凭据引用；服务器端 tools/check_provider.py 应从 DASHSCOPE_API_KEY 读取并调用服务商，输出状态而非 Key：
+先查询目录或 list，再执行需要凭据的工具。下面的应用路径以部署账号 deploy 的 `/home/deploy/apps/translator` 为例，须替换成核实后的实际路径；root 部署时对应 `/root/apps/translator`。先按 [目录规范](update-existing-deployment.md#默认目录) 验证专用应用账号能访问所需文件，不通过开放整个家目录来省略权限配置。服务器端 tools/check_provider.py 应从 DASHSCOPE_API_KEY 读取并调用服务商，输出状态而非 Key：
 
-    ssh server-a 'sudo /usr/bin/python3 -E /usr/local/lib/server-port-deploy/scripts/credentials.py --store /var/lib/server-port-deploy/credentials --identity /etc/server-port-deploy/identity.txt exec --project translator --environment prod --bind DASHSCOPE_API_KEY=dashscope-api-key --as-user translator -- /srv/translator/current/.venv/bin/python /srv/translator/current/tools/check_provider.py'
+    ssh server-a 'sudo /usr/bin/python3 -E /usr/local/lib/server-port-deploy/scripts/credentials.py --store /var/lib/server-port-deploy/credentials --identity /etc/server-port-deploy/identity.txt exec --project translator --environment prod --bind DASHSCOPE_API_KEY=dashscope-api-key --as-user translator -- /home/deploy/apps/translator/.venv/bin/python /home/deploy/apps/translator/tools/check_provider.py'
 
 接入本机专用工具时，需要决定是否允许把凭据取回本机；本技能默认让消费凭据的命令在服务器执行。禁止用 exec 启动 printenv、env、echo 或自行编写的明文输出程序绕过此约定。exec 的子进程有能力输出自己的环境；启动器无法自动识别、脱敏任意业务日志。
 
@@ -108,8 +108,8 @@ catalog 是按需重建的元数据快照，put/轮换后必须刷新；两份 M
     [Service]
     Type=simple
     User=root
-    WorkingDirectory=/srv/translator/current
-    ExecStart=/usr/bin/python3 -E /usr/local/lib/server-port-deploy/scripts/credentials.py --store /var/lib/server-port-deploy/credentials --identity /etc/server-port-deploy/identity.txt exec --project translator --environment prod --bind DASHSCOPE_API_KEY=dashscope-api-key --as-user translator -- /srv/translator/current/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 18001
+    WorkingDirectory=/home/deploy/apps/translator
+    ExecStart=/usr/bin/python3 -E /usr/local/lib/server-port-deploy/scripts/credentials.py --store /var/lib/server-port-deploy/credentials --identity /etc/server-port-deploy/identity.txt exec --project translator --environment prod --bind DASHSCOPE_API_KEY=dashscope-api-key --as-user translator -- /home/deploy/apps/translator/.venv/bin/python -m uvicorn app:app --host 127.0.0.1 --port 18001
     Restart=on-failure
     RestartSec=3
     UMask=0077
@@ -139,7 +139,7 @@ catalog 是按需重建的元数据快照，put/轮换后必须刷新；两份 M
         ports:
           - "127.0.0.1:18001:8000"
 
-调用凭据启动器 exec，末尾命令改为经核实的 docker compose -f /srv/translator/compose.yaml up -d translator。需要有 Docker 操作权限的部署账号；不要把 Docker socket 暴露给应用。
+调用凭据启动器 exec，末尾命令改为经核实的 docker compose -f /home/deploy/apps/translator/compose.yaml up -d translator，并沿用实际 Compose 项目名和数据卷。需要有 Docker 操作权限的部署账号；不要把 Docker socket 暴露给应用。
 
 这种兼容模式会把明文保存在容器运行配置中，Docker 管理者可通过 inspect 读取；并非全程只在内存。不能接受该限制时，按应用能力改用只读 secret 文件或外部密钥服务，单独评审其权限和生命周期。不要声称普通 Compose secrets 自动提供加密存储。
 

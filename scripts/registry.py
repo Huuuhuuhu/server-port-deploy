@@ -238,7 +238,7 @@ def cmd_upsert(args: argparse.Namespace) -> None:
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="维护中文服务器部署登记表")
     parser.add_argument("--registry", type=Path)
-    parser.add_argument("--allow-root", action="store_true", help="恢复操作，必须显式指定 --registry")
+    parser.add_argument("--allow-root", action="store_true", help="以 root 运行时确认目标登记表，必须显式指定 --registry")
     sub = parser.add_subparsers(dest="command", required=True)
     listing = sub.add_parser("list")
     listing.add_argument("--json", action="store_true", help="稳定的英文机器字段名")
@@ -275,7 +275,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     if args.allow_root and args.registry is None:
         parser.error("--allow-root 必须同时显式指定 --registry")
     if hasattr(os, "geteuid") and os.geteuid() == 0 and not args.allow_root:
-        parser.error("请以部署登录用户运行；恢复操作可使用 --allow-root 和显式 --registry")
+        parser.error("请以实际部署账号运行；root 必须使用 --allow-root 并显式指定 --registry")
     args.registry = (args.registry or default_registry_path()).expanduser().absolute()
     return args
 
