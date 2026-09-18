@@ -1,4 +1,4 @@
 interface:
-  display_name: "Server Port Deploy"
-  short_description: "Deploy and update services behind Nginx ports"
-  default_prompt: "Use $server-port-deploy to deploy or update a project behind a dedicated Nginx port, clean stale artifacts, and update the server registry."
+  display_name: "服务器部署与凭据管理"
+  short_description: "通过 Nginx 部署和更新应用，维护中文登记表与服务器加密凭据"
+  default_prompt: "使用 $server-port-deploy 部署或更新我的应用，核验入口与凭据接入，并维护服务器上的中文部署记录。"

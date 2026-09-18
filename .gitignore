@@ -21,3 +21,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Runtime state and credentials belong on the server, never in this skill repo.
+.venv/
+.env
+.env.*
+!.env.example
+*.age
+identity.txt
+*.key
+server-deployments.md
+server-credentials.md
+*.bak.*

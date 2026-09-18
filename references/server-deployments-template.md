@@ -1,19 +1,23 @@
-# Server Deployments Registry
+# 服务器部署登记表
 
-This file is the source of truth for known project deployments managed through this skill. Keep the live copy at `~/server-deployments.md` on the target Linux server.
+本文件记录目标服务器上已核实的部署状态，保存在部署登录用户的 ~/server-deployments.md。端口分配还须结合实际监听和 Nginx 配置确认。
 
-## Port Ranges
+## 端口约定
 
-| Purpose | Preferred Range | Notes |
-|---|---:|---|
-| HTTP user access / Nginx listen port | 80 | Default public HTTP entrypoint when free on this server/IP. |
-| HTTPS user access / Nginx listen port | 443 | Preferred when a domain points to the server and a TLS certificate is configured. |
-| Additional dedicated public ports | 12001-12999 | Use for multiple independent projects on the same IP without domain/path routing. |
-| Backend service ports | 18001-18999 | Local-only app ports, normally bound to `127.0.0.1`. |
+| 用途 | 建议端口或范围 | 说明 |
+|---|---|---|
+| HTTP 入口 | 80 | 可用于已有域名入口的跳转；敏感应用公网访问应使用 HTTPS。 |
+| HTTPS 入口 | 443 | 多个域名可共用，由 Nginx 按域名分流。 |
+| 额外独立公共入口 | 12001–12999 | 没有域名路由时使用，仍需确认访问控制与传输保护。 |
+| 后端服务 | 18001–18999 | 默认仅绑定 127.0.0.1，不直接向公网开放。 |
 
-## Deployments
+## 部署记录
 
-| Project | Server | User URL | User Port | Nginx Listen Port | Backend Bind | Backend Port | Process Manager | Unit/Process | App Dir | Health Check | Nginx Config | Security | Updated | Notes |
-|---|---|---|---:|---:|---|---:|---|---|---|---|---|---|---|---|
+| 项目 | 服务器 | 访问地址 | 用户端口 | Nginx 监听端口 | 后端绑定地址 | 后端端口 | 进程管理器 | 服务单元/进程 | 应用目录 | 健康检查 | Nginx 配置 | 安全措施 | 更新日期 | 备注 | 凭据引用 |
+|---|---|---|---:|---:|---|---:|---|---|---|---|---|---|---|---|---|
 
-> **Security column**: record auth method (none / IP-allowlist / Basic-Auth / app-login / anti-bot), whether API docs are disabled, whether secret fields are masked, and residual risk. "none (open by user's explicit choice)" is valid; silent omission is not.
+安全措施用中文记录认证/授权、TLS、管理接口保护与已知剩余风险。备注记录版本、持久化目录和回滚位置。凭据引用只记录 project/environment/name，不保存真实 Key、密码、令牌或含密码的连接地址。
+
+## 运维备注
+
+在此补充经核实的信息。登记工具保留部署表前后的内容；不要在部署表内混入另一张表。

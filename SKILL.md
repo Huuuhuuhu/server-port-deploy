@@ -1,230 +1,60 @@
 ---
 name: server-port-deploy
-description: Deploy or update small web/API projects on a Linux server behind Nginx, defaulting to public HTTP/HTTPS ports 80/443 when appropriate or dedicated public ports for additional projects. Use when the user asks to deploy a new project, publish a local service to a server IP and port, configure Nginx reverse proxy, create or update a systemd service, avoid port conflicts, support concurrent users, or maintain a server deployment registry with user access ports, Nginx listen ports, and backend service ports.
+description: 在 Linux 服务器上通过 Nginx 部署或更新 Web/API 应用，维护中文部署登记表，并集中管理应用凭据。用户要求发布项目、更新已有服务、配置域名/端口/HTTPS、避免端口冲突，或整理部署所需 API Key 时使用。
 ---
 
-# Server Port Deploy
+# 服务器部署与凭据管理
 
-## Purpose
+把应用部署为「用户 → Nginx → 本机后端服务」，并维护服务器上的中文交接记录。仓库只放工具和模板；真实部署记录、凭据及解密密钥均保存在目标服务器。
 
-Deploy small projects on a Linux server with this shape:
+## 必须保持的约定
 
-```text
-user -> http://SERVER_IP/ or https://DOMAIN/
-     -> Nginx listen 80, 443, or another PUBLIC_PORT
-     -> proxy_pass http://127.0.0.1:BACKEND_PORT
-     -> project service
-```
+- **中文交付**：`~/server-deployments.md`、`~/server-credentials.md` 的标题、说明、用途、安全措施、备注和最终报告使用中文。文件名、域名、路径、环境变量、项目标识及 JSON 机器字段保持原样。脚本不会自动翻译历史自由文本；迁移时保留原文，核实后再补中文，禁止凭空改写业务含义。
+- **先核实再修改**：登记表记录已知状态；端口是否可用还要看实际监听、Nginx 配置和进程。登记表建议不是端口预留。执行部署的授权不代表可以顺便迁移无关应用或凭据。
+- **沿用既有入口**：更新时保留域名、公共端口、后端端口、服务单元及持久化目录，除非任务要求改变。新服务有域名且可配置 TLS 时优先共享 80/443、按域名路由；没有域名路由时才选择空闲独立公共端口。后端默认绑定 127.0.0.1，端口建议 18001–18999；额外公共端口建议 12001–12999。
+- **密钥不进代码和文档**：部署表只记凭据引用，凭据目录只记元数据。禁止把真实值写入 Git、命令行参数、聊天、日志或前端包。密码和 Key 原样保存，不改大小写、不去除空白、不做 Unicode 归一化。新建用户登录密码的认证存储应使用成熟密码哈希；需取回的第三方凭据才进入加密库。
+- **明确接入边界**：服务器应用必须通过本技能的启动工具或自己的适配代码读取凭据；systemd、Docker 和 SDK 不会自动解析 `secret://`。本机 Agent 经 SSH 调用服务器工具，服务器应用启动不依赖本机在线。
+- **可恢复更新**：先准备并构建新版本，再切换。保留当前版本和上一个已验证版本及对应配置，直至约定保留期结束。凭据库、解密密钥、数据库、上传文件不得处于同步删除的代码树内。
 
-Keep the deployment registry at `~/server-deployments.md` on the target server current after every deployment or port change. The skill directory contains only templates and helper scripts; it is not the registry source of truth.
+## 选择本次需要的资料
 
-## Core Rules
+- 新建或调整 Nginx、HTTPS、WebSocket/SSE：读 [Nginx 配置与验证](references/nginx-port-mode.md)。
+- 已有应用升级、替换、清理或回滚：修改服务器前读 [安全更新流程](references/update-existing-deployment.md)。
+- 涉及 API Key、密码、令牌、共享服务或服务器 AI 应用接入：读 [凭据存储与接入](references/credentials.md)；只在需要凭据时初始化存储。
+- 初始化登记表时，使用 [中文登记表模板](references/server-deployments-template.md)。登记工具自动兼容旧英文表头，迁移前备份，保留表外备注；结构无法识别时停止改写，不能初始化覆盖原数据。
 
-- Prefer Nginx dedicated-port mode unless the user explicitly asks for domain/path routing.
-- Prefer public port `80` for plain HTTP when it is free. Prefer public port `443` for HTTPS when a domain points to the server and a TLS certificate is configured. Use `12001-12999` for additional independent projects on the same IP when domain/path routing is not being used.
-- When each tool has its own subdomain, such as `<tool>.huyujie.top`, prefer domain-based HTTPS on shared ports `80` and `443`: one Nginx `server_name` per tool, each proxying to its own `127.0.0.1:<backend_port>`.
-- Do not expose app services directly on `0.0.0.0` unless there is a clear reason. Bind app services to `127.0.0.1:<backend_port>` and expose only Nginx's public port.
-- Treat three ports separately:
-  - **User access port**: the port users type in the browser, such as `http://server-ip/` on port 80, `https://example.com/` on port 443, or `http://server-ip:12001` for an extra dedicated port.
-  - **Nginx listen port**: the external port Nginx listens on. In dedicated-port mode this is normally the same as the user access port.
-  - **Backend service port**: the local port the app process listens on, such as `127.0.0.1:18001`.
-- Before choosing ports, inspect `~/server-deployments.md`, live listeners, Nginx configs, and systemd units. Never rely only on the registry.
-- Run registry commands as the normal deployment/login user. The helper script refuses root execution by default so agents do not accidentally create `/root/server-deployments.md`; use `--allow-root` only for an explicit recovery operation with an explicit `--registry` path.
-- If docs are incomplete, infer conservatively from `README`, package files, Dockerfile, scripts, logs, and common framework defaults. State assumptions in the final answer.
-- Use non-interactive commands. Avoid destructive changes. Back up existing Nginx configs before overwriting.
-- After deployment, verify both the backend local URL and the Nginx public URL.
-- For updates, preserve the existing public port, backend port, systemd unit, Nginx config path, and registry row unless the user explicitly asks to change them. Stop the old service before replacing runtime files, verify the new version, then remove stale code/build/temp artifacts so the server only keeps the active version and declared persistent data.
+## 部署流程
 
-## Security Baseline (MANDATORY)
+1. **理解项目与当前状态**：读项目部署说明及实际启动配置，确认运行时、构建/启动命令、健康接口、必要环境变量、数据库迁移、持久化路径和并发需求。检查目标服务器的登记表、监听端口、Nginx 与进程管理器。检查配置时筛选必要信息，避免把包含秘密的完整 unit、环境或配置输出到工具日志。
+2. **确定入口和访问控制**：优先沿用现有域名/端口；缺域名时按实际用途决定独立端口或受限访问。承载登录、私密数据或付费模型调用的公网入口，应在开放前具备 TLS 和相应认证/授权。IP 限制、登录、限流和反机器人措施解决不同问题；反机器人挑战不能代替身份认证。已有授权足够时直接完成必要配置，不重复询问。
+3. **落实凭据**：识别每个凭据的项目、环境、用途、类型和应用变量；先查服务器目录及已有配置的位置，不显示值。匹配不明确时不能猜选或覆盖。缺失关键凭据则继续独立准备工作，等待该项信息后再启动依赖它的服务。通过 stdin 入库、显式绑定；按参考文档验证并登记引用。
+4. **准备应用**：按项目锁定的依赖构建新版本。确认后端绑定地址，按实际框架选择并发方式；不得仅靠增加 worker 数判断多用户安全。优先复用既有 systemd/Compose 方式。凭据启动器安装在稳定路径，不能依赖临时技能目录或待清理 release。
+5. **配置并验证入口**：生成的 Nginx 文件只是草稿，未包含应用专属访问控制。先取得可用证书再启用引用它的 TLS 配置。备份现有配置；`nginx -t` 通过后 reload，失败立即恢复旧文件，不留坏配置。
+6. **验证实际行为**：检查进程状态、后端健康接口、对应域名和协议的 Nginx 入口，再从外部检查真实 URL。HTTPS 本机验证要使用域名与 SNI，不能用 HTTP 请求 443。核对状态码、预期内容/版本，以及登录或一次最小业务调用；curl 退出 0 或返回登录页都不能单独证明部署成功。限制重试次数；失败按更新参考回滚并说明阻塞。
+7. **登记已确认结果**：成功后更新同一项目/服务器行，写明中文安全状态、凭据引用、持久化位置、版本和回滚位置。记录实测、未测及残余问题，不把计划当成已完成。普通部署账号运行登记脚本；root 恢复必须显式指定目标登记表。
 
-Every deployment MUST go through a security assessment before exposing any port. Security is not optional and not an afterthought — treat it as part of "is this deployment done". The goal is to prevent the classic failures: leaking secrets through an open endpoint, exposing interactive API docs to scanners, or putting an unauthenticated service on the public internet.
+安全检查围绕实际暴露面：检查会返回配置的接口是否泄露 Key，管理/调试接口是否需要关闭或限制，浏览器是否打包了服务端凭据。不要为了部署无条件改写所有业务接口或发明通用密码掩码协议；必要改动遵循项目已有接口约定。
 
-### Before deploying — assess
-For each service ask and answer explicitly:
-1. **Authentication**: Does this service have any access control? If it is fully open and exposes data, mutations, paid resources (LLM keys, quotas), or privileged actions, it MUST get an access layer before going public. Options, strongest first: cloud security-group / firewall IP allowlist → reverse-proxy auth (Nginx Basic Auth) → app-level login → anti-bot challenge (only stops scanners, not humans). Pick based on the user's real threat model and network constraints; ask if unclear.
-2. **API docs exposure**: Any framework that auto-serves interactive docs (FastAPI `/docs` `/redoc` `/openapi.json`, GraphQL introspection, Swagger, actuator endpoints) MUST have them disabled in production unless the user explicitly wants them public. For FastAPI: `FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`.
-3. **Sensitive fields in responses**: Check whether any endpoint returns secrets (API keys, tokens, password hashes, connection strings). Endpoints that echo config MUST mask secret fields (e.g. `sk-1234********cdef`) and accept a sentinel on write so the client never needs the plaintext. A field stored encrypted/hashed in the DB but returned in plaintext over HTTP is a leak.
-4. **Bind address**: App process binds `127.0.0.1:<backend_port>`, never `0.0.0.0`, unless there is a clear documented reason. Only Nginx listens publicly.
-5. **Secrets at rest**: `.env`, key files, password hashes, encrypted-config blobs are never committed to git and never world-readable. Passwords are hashed (salt + strong hash), never stored plaintext.
-6. **Transport**: If the service handles credentials or sensitive data, flag that plain HTTP on a public port sends everything in clear text, and recommend TLS / restricting to trusted networks.
+## 常用工具
 
-### While deploying — enforce
-- Disable framework API docs by default.
-- Add the chosen access control before the first public request is possible, not after.
-- Mask secret fields in any config-returning endpoint.
-- Keep app bound to localhost; expose only via Nginx.
-- Never echo secret values back in command output or logs while deploying.
+命令中的脚本路径替换为服务器上实际安装位置；全局参数放在子命令前。
 
-### After deploying — disclose and record
-- **Tell the user**, in the final response, exactly which security measures were applied (auth method, docs disabled, fields masked, bind address) and which residual risks remain (e.g. "anti-bot only stops scanners, a human who reads the page can still get in", "service is plain HTTP", "secret existed briefly in a pushed commit — rotate if worried").
-- **Record the security posture** in `~/server-deployments.md` for each project: whether it has auth and what kind, whether docs are disabled, whether responses are masked, and any known residual risk. Use the registry's security column / Notes.
-- If a service is intentionally left open (user's explicit choice), state that explicitly in both the response and the registry so it is a recorded decision, not an oversight.
+    python3 scripts/registry.py init
+    python3 scripts/registry.py get --project translator --server server-a
+    python3 scripts/registry.py find-free --server server-a --start 18001 --end 18999 --used 18001 18002
 
-## New Deployment Workflow
+新增记录须提供访问地址、用户端口和后端端口；更新仅修改显式提供的字段，空字符串可清空可选字段：
 
-1. **Orient on the project**
-   - Read deployment docs first: `README*`, `docs/*deploy*`, `DEPLOY*`, `package.json`, `pyproject.toml`, `requirements.txt`, `Dockerfile`, service scripts.
-   - Identify runtime, install command, build command, start command, health endpoint, required env vars, and persistent paths.
-   - If the project has no docs, infer a safe deployment and call out the inference.
+    python3 scripts/registry.py upsert --project translator --server server-a \
+      --user-url https://translate.example.com --user-port 443 --nginx-port 443 \
+      --backend-port 18001 --unit translator.service --app-dir /srv/translator/current \
+      --nginx-config /etc/nginx/conf.d/translator.conf --health-check /health \
+      --security "HTTPS；应用登录；后台接口限制；敏感配置不返回" \
+      --credential-refs translator/prod/dashscope-api-key \
+      --notes "版本、持久化目录和回滚位置以本次核验为准"
 
-2. **Inspect server state**
-   - Read `~/server-deployments.md` on the target server.
-   - If it does not exist, initialize it from `references/server-deployments-template.md` or by running `scripts/registry.py init`.
-   - On the target server, inspect:
-     ```bash
-     ss -ltnp
-     sudo nginx -T
-     systemctl list-units --type=service --all
-     ls -la /etc/nginx/conf.d /etc/nginx/sites-enabled 2>/dev/null
-     ```
-   - Compare live state with registry. If they disagree, trust live state for conflict avoidance and update the registry after verifying.
+`registry.py list` 输出中文 CSV；`list --json` 和 `get` 保留稳定英文 JSON 字段以便 Agent 使用。操作使用锁和原子写入；旧表第一次写入和 `init --force` 之前会生成同目录备份。不要把含有旧秘密的历史文件或备份提交到 Git。
 
-3. **Choose ports**
-   - Prefer these public/user/Nginx ports:
-     - HTTP: `80` when free on this server/IP.
-     - HTTPS: `443` when the user has a domain pointing to the server and TLS can be configured.
-     - Additional dedicated ports: `12001-12999` when multiple independent projects share the same IP without domain/path routing.
-   - Prefer backend ports in `18001-18999`.
-   - If the user specifies a public port, use it only if free in both Nginx and live listeners.
-   - Use `scripts/registry.py find-free` for registry suggestions, then confirm with live `ss` and `nginx -T`.
+## 最终交付
 
-4. **Deploy the app service**
-   - Install dependencies in the project’s normal way.
-   - Configure the app to bind `127.0.0.1:<backend_port>`.
-   - Prefer systemd for long-running services. Use clear unit names, for example `<project>.service`.
-   - Start and verify the backend:
-     ```bash
-     sudo systemctl daemon-reload
-     sudo systemctl enable --now <unit>
-     systemctl status <unit> --no-pager
-     curl -i http://127.0.0.1:<backend_port>/
-     ```
-
-5. **Configure Nginx**
-   - Generate a dedicated-port server block. See `references/nginx-port-mode.md`.
-   - Use `scripts/render_nginx.py` to draft the config when helpful.
-   - Install to `/etc/nginx/conf.d/<project>.conf` or the server’s existing convention.
-   - Validate and reload:
-     ```bash
-     sudo nginx -t
-     sudo systemctl reload nginx
-     ```
-   - Ensure the cloud security group and host firewall allow the public port.
-
-6. **Configure HTTPS for domain/subdomain deployments**
-   - Use this when the user has a domain or per-tool subdomains pointing at the server, for example `<tool>.huyujie.top`.
-   - Prefer shared public ports `80` and `443` with name-based Nginx routing instead of assigning each tool a high public port.
-   - For a single new subdomain, configure an Nginx `server_name <tool>.huyujie.top` block and run:
-     ```bash
-     sudo certbot --nginx -d <tool>.huyujie.top
-     ```
-   - Certbot configures the certificate once and installs auto-renewal. Do not repeat certificate setup for every app restart; repeat it only when adding a new hostname or changing certificate strategy.
-   - For many subdomains under one base domain, prefer a wildcard certificate when DNS API automation is available:
-     ```bash
-     sudo certbot certonly --dns-<provider> -d huyujie.top -d '*.huyujie.top'
-     ```
-     Then reuse the same wildcard cert paths in each tool's Nginx server block. This avoids running HTTP certificate issuance for every new subdomain, but still requires adding an Nginx `server_name` block for each new tool.
-   - If DNS API automation is not available, use per-subdomain certificates with `certbot --nginx -d <tool>.huyujie.top`.
-   - Open cloud security group and host firewall ports `80/tcp` and `443/tcp`.
-
-7. **Verify externally**
-   - From the server:
-     ```bash
-     curl -i http://127.0.0.1:<backend_port>/
-     curl -i http://127.0.0.1:<public_port>/
-     ```
-   - If possible, verify from the user side:
-     ```text
-     http://SERVER_IP:<public_port>
-     ```
-
-8. **Update the registry**
-   - Update `~/server-deployments.md` with:
-     - project name
-     - host/server
-     - user access URL and port
-     - Nginx listen port
-     - backend bind address and port
-     - process manager/systemd unit
-     - app directory
-     - Nginx config path
-     - health check
-     - **security posture** (auth method or "none/open by choice", API docs disabled?, sensitive fields masked?, residual risk)
-     - update date and notes
-   - Use `scripts/registry.py upsert` when possible.
-
-## Existing Deployment Update Workflow
-
-Use this when the project is already deployed and the user asks to update, redeploy, replace with a new version, pull latest code, or clean up an old version.
-
-1. **Load the existing deployment**
-   - Read `~/server-deployments.md` as the normal deployment user, not with `sudo`.
-   - Use `scripts/registry.py get --project "<project>" --server "<server>"` when possible.
-   - Confirm the live systemd unit, app directory, Nginx config, public port, and backend port from the server itself:
-     ```bash
-     systemctl cat <unit>
-     sudo nginx -T
-     ss -ltnp
-     ```
-   - If registry and live state disagree, trust live state for safety and update the registry after verification.
-
-2. **Plan what must persist**
-   - Preserve `.env`, user uploads, databases, and explicit shared storage.
-   - Do not preserve stale dependency folders, old build output, temporary archives, generated caches, or old release directories unless the user asks for rollback retention.
-   - Read `references/update-existing-deployment.md` before making server changes.
-
-3. **Stop, update, and rebuild**
-   - Stop the current service before replacing files:
-     ```bash
-     sudo systemctl stop <unit>
-     ```
-   - Replace the app with the new version using a clean `rsync --delete` pattern with explicit excludes for persistent paths, or use a `releases/<timestamp>` + `current` symlink layout for safer rollback.
-   - Reinstall dependencies and rebuild from the new source. Avoid relying on old `.venv`, `node_modules`, `dist`, or cache folders unless the project documentation explicitly requires it.
-   - Update the systemd unit only if the runtime command, app directory, env file, or backend port changed.
-   - Update Nginx only if the public port, backend port, timeouts, WebSocket/streaming behavior, or config convention changed. Back up before overwriting.
-
-4. **Restart and verify**
-   - Run:
-     ```bash
-     sudo systemctl daemon-reload
-     sudo systemctl start <unit>
-     systemctl status <unit> --no-pager
-     journalctl -u <unit> -n 80 --no-pager
-     curl -i http://127.0.0.1:<backend_port>/
-     curl -i http://127.0.0.1:<public_port>/
-     ```
-   - If verification fails, restore the previous working release or backed-up systemd/Nginx files and leave the registry pointing at the live working version.
-
-5. **Clean stale artifacts**
-   - After successful verification, remove old release directories, temporary upload/extract folders, stale build outputs, and Nginx backups created during this update unless the user requested rollback retention.
-   - Keep only active code plus documented persistent paths.
-   - Check for leftovers with targeted commands such as:
-     ```bash
-     find <app_dir> -maxdepth 2 \( -name '*.bak.*' -o -name '*.tmp' -o -name '__pycache__' \) -print
-     ```
-
-6. **Update the registry**
-   - Use `scripts/registry.py upsert` to update the same row with the confirmed live ports, unit, app dir, Nginx config, health check, security posture, update date, and notes about persistent paths.
-   - Run registry commands as the deployment/login user. Only use `sudo` for systemd, Nginx, firewall, or filesystem paths that require it.
-
-## Resources
-
-- `~/server-deployments.md` on the target server: mutable registry of deployed projects and port assignments. Always update it after successful deployment or confirmed changes.
-- `references/server-deployments-template.md`: template used to initialize the registry when `~/server-deployments.md` is missing.
-- `references/nginx-port-mode.md`: Nginx dedicated-port examples and validation commands.
-- `references/update-existing-deployment.md`: safe update, rollback, and cleanup procedure for existing deployments.
-- `scripts/registry.py`: list, suggest free ports, and upsert project rows in the registry.
-- `scripts/render_nginx.py`: generate a dedicated-port Nginx server block.
-
-## Final Response Checklist
-
-Report:
-
-- Deployed project name and server.
-- User URL, Nginx listen port, backend bind/port.
-- systemd unit and Nginx config path.
-- Verification commands and results.
-- Cleanup performed for old versions and stale artifacts.
-- Registry update path.
-- **Security measures applied** (auth method, API docs disabled, sensitive fields masked, bind address) and **residual risks** — see Security Baseline. This is mandatory in every deployment report.
-- Any assumptions, missing env vars, firewall/security-group actions still needed, or residual risk.
+用中文简要报告实际 URL、部署版本、进程与配置位置、验证结果、持久化/回滚位置，以及两份服务器文档的路径。涉及凭据时列出引用与接入方式，绝不展示值。说明已落实的访问控制和实际剩余事项；尚未验证的外部连通性或服务商 Key 有效性必须标为未验证。

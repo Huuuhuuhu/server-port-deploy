@@ -1,159 +1,76 @@
-# Updating an Existing Dedicated-Port Deployment
+# 已有部署的安全更新
 
-Use this when the project already exists on the server and the user wants a new version deployed under the same public port rules.
+更新的目标是上线新版本，同时保留数据、入口和可验证的恢复路径。不要把「清理干净」理解为删除唯一可用的旧版本。
 
-## Goals
+## 确认现状
 
-- Preserve the existing user URL, Nginx listen port, backend port, service name, and registry row unless the user asks to change them.
-- Stop the old process cleanly before replacing runtime files.
-- Keep declared persistent state only: `.env`, uploaded files, databases, logs that must be retained, and explicit shared storage.
-- Remove obsolete app code, stale build output, temporary archives, old virtualenvs, old node modules, and unused release directories after the new version is verified.
-- Leave Nginx, systemd, and `~/server-deployments.md` matching the new live state.
+用部署登录账号读取 ~/server-deployments.md，结合实际监听、应用目录、服务配置和 Nginx 路由核实。读取日志和配置时仅输出必要字段，避免暴露环境里的 Key。记录当前版本、访问地址、三类端口、服务单元、应用账号、健康接口、凭据引用及回滚目标。
 
-## Discovery
+把持久化路径逐项列清：数据库、上传、业务文件、非敏感配置、凭据库、identity。凭据库和 identity 位于应用树外；若遗留部署不满足，先安排安全迁移，不能用宽泛的 rsync --delete 覆盖。
 
-1. Read `~/server-deployments.md` as the normal deployment user.
-2. Query the existing row when possible:
+## 首选：先准备新 release，再切换
 
-   ```bash
-   python scripts/registry.py get --project "<project>" --server "<server>"
-   ```
+推荐布局：
 
-3. Verify live state before making changes:
+    /srv/project/
+      current -> releases/<active>
+      releases/<active>/
+      releases/<previous>/
+      shared/data/
+      shared/uploads/
 
-   ```bash
-   systemctl cat <unit>
-   systemctl status <unit> --no-pager
-   sudo nginx -T | grep -nE 'listen\s+<public_port>\b|proxy_pass\s+http://127\.0\.0\.1:<backend_port>\b' || true
-   ss -ltnp | grep -E ':(<public_port>|<backend_port>)\b' || true
-   ls -la <app_dir>
-   ```
+1. 创建全新的 release 目录，传入已核实版本的源代码。在新目录里安装锁定依赖、创建新的虚拟环境并完成构建；不复用旧 .venv/node_modules/dist。
+2. 接入 shared 数据和已有凭据启动器。启动器及库在 release 之外，引用保持不变。
+3. 如可行，用临时本地端口或项目自检验证新包。涉及数据库迁移时先检查兼容性及恢复方案；切回符号链接不会撤销不可逆的数据变化。不能在旧服务仍工作时擅自执行破坏性迁移。
+4. 保存当前 current 指向及需要更改的 unit/Nginx 配置。新依赖和配置检查通过后，才进入短暂切换窗口。
+5. 同一文件系统内创建临时链接并原子替换 current，然后按项目需要 restart。不要在仍运行的旧服务下面逐个覆盖运行文件。
+6. 在有限时间内验证进程、本机后端、Nginx 域名入口及一次最小业务行为。默认可以从 5 次、间隔 2 秒起步，按正常启动时间调整；不能无限循环掩盖失败。
 
-4. Compare the registry row with live systemd and Nginx config. Trust live state for safety, then update the registry after successful verification.
+示例仅展示切换方式；app_root、release_path、unit 都必须从当前部署核实，临时链接不得已存在：
 
-## Update Strategy
+    previous_release="$(readlink -f "$app_root/current")"
+    ln -s "$release_path" "$app_root/current.next"
+    mv -Tf "$app_root/current.next" "$app_root/current"
+    sudo systemctl restart "$unit"
 
-Prefer a clean replacement that preserves only explicit shared state.
+首次采用 release 布局时，现有 current 可能是普通目录，不能直接套用上述命令。需先设计一次迁移并保留原目录。
 
-For simple flat deployments:
+## 只能原目录替换时
 
-```bash
-sudo systemctl stop <unit>
-sudo rsync -a --delete \
-  --exclude '.env' \
-  --exclude '.venv' \
-  --exclude 'node_modules' \
-  --exclude 'data' \
-  --exclude 'uploads' \
-  --exclude 'storage' \
-  --exclude 'logs' \
-  <new_project_dir>/ <app_dir>/
-```
+先在独立目录完成构建，然后形成确实可恢复的旧代码/配置备份。确认备份可读，持久化路径已排除。先运行同步 dry-run、检查删除清单，才在必要的停机窗口执行实际同步。不要把以下占位路径直接照抄到生产：
 
-Then recreate dependencies/build outputs from the new source, rather than reusing stale dependency folders:
+    rsync -an --delete \
+      --exclude '.env' --exclude 'data/' --exclude 'uploads/' \
+      "$staged_release/" "$app_root/"
 
-```bash
-cd <app_dir>
-# Python example
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
+排除项必须按项目调整，不能假定只有三个持久化路径。构建产物与虚拟环境按项目可搬迁性处理；Python venv 常包含绝对路径，应在最终 release 路径构建。原目录更新要明确停机窗口及完整恢复命令，不能只写一句「失败再回滚」。
 
-# Node example
-npm ci
-npm run build
-```
+## Nginx 与服务配置
 
-For projects with meaningful downtime or rollback needs, use a release layout:
+未改变入口、后端、超时、流式模式或启动方式时，无需重写配置。改变时保存原文件与权限，安装新配置后先验证：
 
-```text
-<base_dir>/
-  current -> releases/<timestamp>
-  releases/<timestamp>/
-  shared/.env
-  shared/data/
-  shared/uploads/
-```
+    sudo nginx -t
 
-Build the new release first, repoint `current`, restart, verify, then delete old release directories after success unless the user explicitly asks to keep rollback copies.
+失败时立即恢复旧磁盘文件并再次验证，不 reload。验证通过后 reload，检查命令返回值与实际入口；reload 失败也应恢复并核实当前运行配置。保留恢复所需的配置备份。新增错误配置必须移出被 include 的目录，不能改名为仍会匹配的 .conf。
 
-## Systemd and Nginx
+unit 更新后 daemon-reload，再重启指定服务；不得重启无关应用。
 
-- Reuse the existing unit name unless the current name is clearly wrong.
-- If the start command, working directory, environment path, or backend port changed, update the unit file and run:
+## 验证与回滚
 
-  ```bash
-  sudo systemctl daemon-reload
-  ```
+根据项目选择真实健康路径，例如：
 
-- Keep app services bound to `127.0.0.1:<backend_port>`.
-- If Nginx config changes, back up the old file before overwriting:
+    curl --fail-with-body --silent --show-error --max-time 10 http://127.0.0.1:18001/health
+    curl --fail-with-body --silent --show-error --max-time 10 \
+      --resolve translate.example.com:443:127.0.0.1 https://translate.example.com/health
 
-  ```bash
-  sudo cp <nginx_conf> <nginx_conf>.bak.$(date +%Y%m%d-%H%M%S)
-  sudo nginx -t
-  sudo systemctl reload nginx
-  ```
+使用目标服务器 curl 支持的参数；旧版不支持 --fail-with-body 时用 --fail，并单独收集已脱敏诊断。不能关闭证书验证来宣称 TLS 正常。HTTP 独立端口则请求实际端口；域名路由必须携带正确 Host。核对预期响应内容/版本；301、登录页和泛用 200 页面都不能代替后端健康检查。
 
-- After Nginx reload succeeds and the public URL is verified, remove superseded `.bak.*` files created during this update unless retaining them is needed for an active rollback.
+验证失败时：保留必要且已脱敏的错误证据，恢复之前的 current 指向及确实修改过的配置；按数据库兼容性计划恢复或停止继续操作。重启旧版并重新验证。旧版仍失败时明确报告当前状态、影响及阻塞，不循环切换。凭据轮换与代码更新尽量分开；已撤销的服务商 Key 不能靠回滚代码恢复。
 
-## Restart and Verification
+## 清理和登记
 
-Use this order:
+确认新版本通过验证后，默认保留当前 release、上一个已验证 release 及配套配置。更多版本按已有保留策略清理；磁盘紧张时先核实占用，不先删除唯一回滚版本。任何递归删除都先检查解析后的路径属于预期 releases 目录，且不等于 current、previous 或 shared。
 
-```bash
-sudo systemctl start <unit>
-systemctl status <unit> --no-pager
-journalctl -u <unit> -n 80 --no-pager
-curl -i http://127.0.0.1:<backend_port>/<health_path>
-curl -i http://127.0.0.1:<public_port>/<health_path>
-```
+临时传输包、失败构建和无用缓存可在检查后清理；数据库、用户文件、凭据及其恢复材料不属于代码垃圾。备份保留期到期后依服务器规范处理。
 
-If verification fails:
-
-- Stop the failed unit.
-- Restore the previous systemd/Nginx files or previous release symlink if a backup exists.
-- Run `sudo systemctl daemon-reload`, `sudo nginx -t`, reload Nginx if needed, and start the old service.
-- Report the failure and leave the registry pointing at the working live version.
-
-## Cleanup Standard
-
-After successful verification:
-
-- Remove temporary upload archives and extracted staging directories.
-- Remove stale build outputs that are not part of the active version.
-- Remove old release directories unless the user explicitly requested rollback retention.
-- Remove Nginx backup files created during this update after the new config is verified.
-- Keep only persistent state that the project requires and that is documented in the registry notes.
-- Run a final check:
-
-  ```bash
-  systemctl is-active <unit>
-  ss -ltnp | grep -E ':(<public_port>|<backend_port>)\b' || true
-  find <app_dir> -maxdepth 2 \( -name '*.bak.*' -o -name '*.tmp' -o -name '__pycache__' \) -print
-  ```
-
-Do not delete databases, uploads, `.env`, user content, or declared shared storage unless the user explicitly asks.
-
-## Registry Update
-
-Update the existing row with the confirmed live state:
-
-```bash
-python scripts/registry.py upsert \
-  --project "<project>" \
-  --server "<server>" \
-  --user-url "http://<server_ip>:<public_port>" \
-  --user-port <public_port> \
-  --nginx-port <public_port> \
-  --backend-bind "127.0.0.1" \
-  --backend-port <backend_port> \
-  --process-manager "systemd" \
-  --unit "<unit>" \
-  --app-dir "<app_dir>" \
-  --health-check "http://127.0.0.1:<backend_port>/<health_path>" \
-  --nginx-config "<nginx_conf>" \
-  --notes "updated to <version>; persistent state: <paths>"
-```
-
-Run this as the deployment/login user, not through `sudo`, so the registry remains at `~/server-deployments.md`.
+最后 upsert 同一项目/服务器行，中文记录实际版本、验证结果、持久化目录、当前和上一版路径、凭据引用及必要的安全状态。未通过验证时保留旧部署的有效字段，并记录失败结果；不要把新计划标成成功上线。
