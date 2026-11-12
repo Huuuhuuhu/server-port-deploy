@@ -186,6 +186,7 @@ flowchart LR
 python3 scripts/registry.py --help
 python3 scripts/render_nginx.py --help
 python3 scripts/credentials.py --help
+python3 scripts/check_permissions.py --help
 ```
 
 | 入口 | 用途 |
@@ -195,6 +196,8 @@ python3 scripts/credentials.py --help
 | [render_nginx.py](scripts/render_nginx.py) | 生成 HTTP/HTTPS、WebSocket、SSE 配置草稿；负责生成，不执行安装、证书申请或重载 |
 | [credentials.py](scripts/credentials.py) | age 凭据库、元数据、备份和应用启动注入 |
 | [safe_io.py](scripts/safe_io.py) | 供其他脚本使用的锁、原子写入及路径与权限检查 |
+| [check_permissions.py](scripts/check_permissions.py) | 以非 root 应用账号只读检查代码、工具、模板和已列出数据目录的文件权限 |
+| [文件权限与验收](references/permissions.md) | 所有部署共用的工具安装、读写边界与验收；无需启用凭据库 |
 | [中文登记表模板](references/server-deployments-template.md) | 部署表字段与端口约定 |
 | [Nginx 配置与验证](references/nginx-port-mode.md) | 域名、证书、代理配置与分层验证 |
 | [应用目录与原目录更新](references/update-existing-deployment.md) | 家目录下的 apps 布局、原目录更新、数据保护与验证 |
@@ -207,6 +210,8 @@ python3 scripts/credentials.py --help
 [GitHub Actions](https://github.com/Huuuhuuhu/server-port-deploy/actions/workflows/check.yml) 在推送和 Pull Request 时运行回归检查，使用临时 Ubuntu 24.04 环境和 Python 3.9、3.13、3.14。页面中的 `linux (3.9)` 等名称表示使用不同 Python 版本的任务。CI 依赖固定到已核实的提交，并设置运行超时。
 
 测试覆盖登记表迁移、异常输入与并发更新，Nginx 配置生成、输入校验和真实配置校验，age 加解密、错误路径与上层目录权限处理、同账号跨项目访问，以及 root 启动器降权后的文件访问限制。测试使用临时文件和合成凭据。
+
+文件权限回归在 Linux 临时目录中复现可写代码、0666 工具/模板、ACL、可替换上层目录和数据子树排除，验证检查会拒绝问题配置且不改动文件。检查工具是文件权限验收的一部分，不能替代实际进程身份、服务沙箱、业务写入和遗漏路径的核实。
 
 在用于测试的 Linux 环境中，从仓库根目录运行：
 

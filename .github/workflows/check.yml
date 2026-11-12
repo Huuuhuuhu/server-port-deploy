@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install real encryption and Nginx tools
-        run: sudo apt-get update && sudo apt-get install -y age nginx openssl
+        run: sudo apt-get update && sudo apt-get install -y age nginx openssl acl
       - name: Run regression and encryption integration tests
         env:
           SPD_REQUIRE_AGE: '1'

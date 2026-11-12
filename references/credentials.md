@@ -40,11 +40,8 @@ SSH 登录本身需要的密钥不能仅存在这台服务器的凭据库，否�
 
 要求 Python 3.9+、age 和 age-keygen。按目标发行版安装官方 age 包；Ubuntu 可用 apt，其他发行版核对官方发布渠道。安装后确认两个命令均可用。参考 [age 官方项目](https://github.com/FiloSottile/age)。
 
-将技能代码安装到稳定、不可被应用账号改写的位置；下面的 skill_dir 指向已检查的技能源目录：
+先按 [通用工具安装与权限验收](permissions.md#安装技能工具) 安装脚本与模板；该要求适用于所有部署。下面仅初始化凭据功能需要的目录：
 
-    sudo install -d -m 0755 /usr/local/lib/server-port-deploy/scripts /usr/local/lib/server-port-deploy/references
-    sudo install -m 0644 "$skill_dir"/scripts/*.py /usr/local/lib/server-port-deploy/scripts/
-    sudo install -m 0644 "$skill_dir"/references/server-deployments-template.md /usr/local/lib/server-port-deploy/references/
     sudo install -d -m 0700 /var/lib/server-port-deploy/credentials /etc/server-port-deploy
 
 Bash 中可定义下面的调用函数；它只是缩短示例，不包含任何凭据：
