@@ -1,6 +1,7 @@
 """Small atomic-file and advisory-lock helpers (Python 3.9+, no dependencies)."""
 from __future__ import annotations
 
+import errno
 import os
 import stat
 import tempfile
@@ -103,7 +104,9 @@ def file_lock(path: Path, timeout: float = 15):
                     import fcntl
                     fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except (BlockingIOError, OSError):
+            except OSError as error:
+                if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK, errno.EDEADLK):
+                    raise
                 if time.monotonic() >= deadline:
                     raise TimeoutError("文件正被其他部署进程使用，请稍后重试") from None
                 time.sleep(0.05)

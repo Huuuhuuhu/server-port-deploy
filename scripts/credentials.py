@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
@@ -38,8 +39,8 @@ def run_age(program: str, arguments: list[str], data: bytes = b"") -> bytes:
     try:
         result = subprocess.run([executable, *arguments], input=data, capture_output=True,
                                 timeout=30, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        raise ValueError("age 执行失败或超时，未输出敏感内容") from None
+    except subprocess.TimeoutExpired:
+        raise ValueError("age 执行超时") from None
     if result.returncode:
         # Never include subprocess stderr/stdout: identities or plaintext may be present.
         raise ValueError("age 操作失败；请检查密钥、密文和版本，未改写凭据") from None
@@ -234,7 +235,10 @@ def launch(args, bindings: dict[str, str]) -> None:
         if os.name != "posix" or os.geteuid() != 0:
             raise ValueError("--as-user 需要 Linux root 启动器")
         import pwd
-        account = pwd.getpwnam(args.as_user)
+        try:
+            account = pwd.getpwnam(args.as_user)
+        except KeyError:
+            raise ValueError("指定的运行账号不存在") from None
         if account.pw_uid == 0:
             raise ValueError("--as-user 必须是非 root 应用账号")
         os.initgroups(account.pw_name, account.pw_gid)
@@ -279,6 +283,7 @@ def parse_args(argv=None):
 
 
 def main() -> None:
+    stage = "准备凭据工具"
     try:
         args = parse_args()
         if os.name == "posix":
@@ -286,14 +291,20 @@ def main() -> None:
             resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         raw = None
         if args.command == "put":
+            stage = "读取凭据输入"
             if sys.stdin.isatty():
                 raise ValueError("请通过受保护管道提供 stdin，禁止在命令行参数中填写凭据")
             # Read potentially delayed SSH input before locking out other clients.
             raw = sys.stdin.buffer.read(MAX_VALUE + 1)
+        stage = "准备凭据目录"
         vault = Vault(args.store, args.identity)
         vault.prepare()
         bindings = None
+        stage = "打开凭据锁"
         with file_lock(vault.root / ".lock"):
+            stage = {"init": "初始化凭据库", "put": "写入凭据", "list": "列出凭据元数据",
+                     "check": "检查凭据", "catalog": "更新凭据目录", "backup": "备份密文",
+                     "exec": "读取启动凭据"}[args.command]
             if args.command == "init":
                 vault.initialize()
                 print("凭据库已就绪；请将解密密钥单独备份到可信位置")
@@ -336,12 +347,21 @@ def main() -> None:
                 print("密文备份完成；未包含解密密钥")
             elif args.command == "exec":
                 bindings = vault.bindings(args)
+            stage = "释放凭据锁"
         if bindings is not None:
+            stage = "启动应用"
             launch(args, bindings)
-    except (ValueError, OSError, KeyError, TimeoutError, argparse.ArgumentTypeError) as error:
-        # OS errors can contain arbitrary filenames/command contents; don't echo those.
-        message = str(error) if isinstance(error, ValueError) else "凭据操作失败，请检查路径、权限或启动命令"
-        raise SystemExit(message) from None
+    except TimeoutError:
+        raise SystemExit(f"{stage}超时") from None
+    except OSError as error:
+        # strerror and filenames may include secrets or child command arguments.
+        reasons = {errno.EROFS: "文件系统只读", errno.EACCES: "权限不足", errno.EPERM: "权限不足",
+                   errno.ENOENT: "找不到文件或命令", errno.ENOTDIR: "路径类型错误",
+                   errno.ENOSPC: "磁盘空间不足"}
+        reason = reasons.get(error.errno, errno.errorcode.get(error.errno, "系统错误"))
+        raise SystemExit(f"{stage}失败，{reason}") from None
+    except (ValueError, argparse.ArgumentTypeError) as error:
+        raise SystemExit(str(error)) from None
 
 
 if __name__ == "__main__":

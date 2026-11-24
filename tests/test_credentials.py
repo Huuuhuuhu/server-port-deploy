@@ -1,4 +1,5 @@
 from __future__ import annotations
+import errno
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -17,6 +19,43 @@ from safe_io import file_lock
 AGE_AVAILABLE = bool(shutil.which("age") and shutil.which("age-keygen"))
 if os.environ.get("SPD_REQUIRE_AGE") == "1" and not AGE_AVAILABLE:
     raise RuntimeError("Real age is required for this test run")
+
+
+class CredentialDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        if os.name == "posix":
+            limit = patch("resource.setrlimit")
+            limit.start()
+            self.addCleanup(limit.stop)
+
+    def failure(self, *args):
+        argv = ["credentials.py", "--store", str(self.folder / "store"),
+                "--identity", str(self.folder / "keys" / "identity.txt"), *args]
+        with patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as caught:
+            credentials.main()
+        return str(caught.exception)
+
+    def test_reports_operation_and_errno_without_os_error_detail(self):
+        sensitive = "SYNTHETIC-PRIVATE-DATA"
+        for target, error, expected in (
+            ("credentials.file_lock", OSError(errno.EROFS, sensitive, sensitive), "打开凭据锁失败，文件系统只读"),
+            ("credentials.file_lock", TimeoutError(sensitive), "打开凭据锁超时"),
+            ("credentials.Vault.prepare", PermissionError(errno.EACCES, sensitive, sensitive), "准备凭据目录失败，权限不足"),
+            ("credentials.Vault.metadata", OSError(errno.EIO, sensitive, sensitive), "列出凭据元数据失败，EIO"),
+        ):
+            with self.subTest(target=target, expected=expected), patch(target, side_effect=error):
+                message = self.failure("list", "--project", "test", "--environment", "prod")
+                self.assertEqual(message, expected)
+
+    def test_missing_command_has_a_separate_stage_and_keeps_arguments_private(self):
+        executable = self.folder / "nonexistent-private-command"
+        with patch.object(credentials.Vault, "bindings", return_value={}):
+            message = self.failure("exec", "--project", "test", "--environment", "prod",
+                                   "--bind", "KEY=one", "--", str(executable), "private argument")
+        self.assertEqual(message, "启动应用失败，找不到文件或命令")
 
 
 @unittest.skipUnless(AGE_AVAILABLE, "install age and age-keygen to run encryption integration tests")
